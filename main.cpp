@@ -1,3 +1,6 @@
+// TODO: below TODO needs SPI, do that first
+// TODO: try this lib https://github.com/michaelkamprath/ShiftRegisterLEDMatrixLib
+
 #include <tinyNeoPixel_static.h>
 #include <Wire.h>
 
@@ -5,7 +8,6 @@
 #include "scan.h"
 
 #define I2C_ADDRESS 0x13
-#define STATUS_LED_PIN 5
 
 #define MATRIX_HEIGHT NUM_ROWS
 #define MATRIX_WIDTH NUM_COLS
@@ -14,19 +16,17 @@
 #define MIN_UPDATE_INTERVAL 5
 #define MAX_UPDATE_INTERVAL 500
 
+// message
 char message[MAX_MESSAGE_SIZE];
 int messageWidth;
-int messageColor = 0;
 int x = NUM_COLS;
 int y = NUM_ROWS;
-volatile bool display = true;
-unsigned long lastDrawUpdate = 0;
-unsigned long drawUpdateInterval = 25;
-unsigned long statusUpdateInterval = 1000;
-unsigned long lastStatusUpdate = 0;
 
-unsigned long displayUpdateInterval = 5000;
-unsigned long lastDisplayUpdate = 0;
+volatile bool display = true;
+
+// updates/timing
+unsigned long drawUpdateInterval = 300;
+unsigned long lastDrawUpdate = 0;
 
 void setMessage(const char *newMessage)
 {
@@ -48,6 +48,7 @@ void receiveEvent(int bytesReceived)
   if (command == 0x00)
   {
     bool state = Wire.read();
+    setScanDisplay(state);
     display = state;
   }
   else if (command == 0x01)
@@ -89,6 +90,7 @@ void drawPixel(uint16_t x, uint16_t y, uint32_t color)
     // uint16_t flippedX = MATRIX_WIDTH - 1 - x;
     // uint16_t flippedY = MATRIX_HEIGHT - 1 - y;
     // matrix.setPixelColor(flippedY * MATRIX_WIDTH + flippedX, color);
+    //displayBuffer[y] |= (1 << x);
   }
 }
 
@@ -98,11 +100,16 @@ void setup()
   Wire.onReceive(receiveEvent);
 
   pinMode(STATUS_LED_PIN, OUTPUT);
-  digitalWrite(STATUS_LED_PIN, LOW);
+  digitalWrite(STATUS_LED_PIN, HIGH);
 
   setMessage("test");
 
   initScan();
+  setScanDisplay(true);
+
+  // clear();
+  // delay(1000);
+  // drawString(x, MATRIX_HEIGHT - 2, MATRIX_WIDTH, MATRIX_HEIGHT, "test", true);
 }
 
 void loop()
@@ -112,31 +119,17 @@ void loop()
     return;
   }
 
-  if (millis() - lastStatusUpdate > statusUpdateInterval)
-  {
-    bool statusLed = digitalRead(STATUS_LED_PIN);
-    digitalWrite(STATUS_LED_PIN, !statusLed);
-    lastStatusUpdate = millis();
-  }
-
-  if (millis() - lastDisplayUpdate > displayUpdateInterval)
-  {
-    display = !display;
-    setScanDisplay(display);
-    lastDisplayUpdate = millis();
-  }
-
+  setScanDisplay(display);
   if (!display)
   {
     delay(100);
     return;
   }
-
-  scroll();
-  lastDrawUpdate = millis();
-
+  
   // TODO: Update draw buffer
   // drawString(x, MATRIX_HEIGHT - 2, MATRIX_WIDTH, MATRIX_HEIGHT, "test", true);
+  scroll();
+  lastDrawUpdate = millis();
 
   if (--x < -messageWidth)
   {
