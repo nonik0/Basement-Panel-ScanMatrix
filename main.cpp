@@ -8,6 +8,7 @@
 #include "scan.h"
 
 #define I2C_ADDRESS 0x13
+#define SWITCH_PIN 15
 
 #define MATRIX_HEIGHT NUM_ROWS
 #define MATRIX_WIDTH NUM_COLS
@@ -22,11 +23,26 @@ int messageWidth;
 int x = NUM_COLS;
 int y = NUM_ROWS;
 
-volatile bool display = true;
+volatile bool i2cDisplay = true;
+volatile bool switchDisplay;
 
 // updates/timing
 unsigned long drawUpdateInterval = 300;
 unsigned long lastDrawUpdate = 0;
+
+bool setDisplay(bool i2cDisplay)
+{
+  switchDisplay = digitalRead(SWITCH_PIN);
+
+  bool display = i2cDisplay && switchDisplay;
+  setScanDisplay(display);
+  return display;
+}
+
+bool setDisplay()
+{
+  return setDisplay(i2cDisplay);
+}
 
 void setMessage(const char *newMessage)
 {
@@ -45,12 +61,14 @@ void receiveEvent(int bytesReceived)
   static int bufferIndex = 0;
 
   uint8_t command = Wire.read();
+  
+  // setDisplay
   if (command == 0x00)
   {
-    bool state = Wire.read();
-    setScanDisplay(state);
-    display = state;
+    bool i2cDisplay = Wire.read();
+    setDisplay(i2cDisplay);
   }
+  // setMessage
   else if (command == 0x01)
   {
     // read chunk into buffer, discard extra bytes if past buffer size
@@ -76,10 +94,16 @@ void receiveEvent(int bytesReceived)
       bufferIndex = 0;
     }
   }
+  // setScrollSpeed
   else if (command == 0x02)
   {
     uint8_t scrollSpeed = Wire.read();
     drawUpdateInterval = map(constrain(scrollSpeed, 0, 100), 100, 0, MIN_UPDATE_INTERVAL, MAX_UPDATE_INTERVAL);
+  }
+  // getState
+  else if (command == 0x03)
+  {
+    Wire.write(switchDisplay);
   }
 }
 
@@ -99,17 +123,14 @@ void setup()
   Wire.begin(I2C_ADDRESS);
   Wire.onReceive(receiveEvent);
 
+  pinMode(SWITCH_PIN, INPUT_PULLUP);
+
   pinMode(STATUS_LED_PIN, OUTPUT);
   digitalWrite(STATUS_LED_PIN, HIGH);
 
   setMessage("test");
 
   initScan();
-  setScanDisplay(true);
-
-  // clear();
-  // delay(1000);
-  // drawString(x, MATRIX_HEIGHT - 2, MATRIX_WIDTH, MATRIX_HEIGHT, "test", true);
 }
 
 void loop()
@@ -119,8 +140,7 @@ void loop()
     return;
   }
 
-  setScanDisplay(display);
-  if (!display)
+  if (!setDisplay())
   {
     delay(100);
     return;

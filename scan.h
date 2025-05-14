@@ -8,13 +8,13 @@
 #define NUM_LEDS 64
 #define NUM_BLANK_CYCLES 0
 
-#define OE_PIN 19      // !OE, can be tied to GND if need to save pin
-#define DATA_PIN 18    // MOSI/IN
-#define LATCH_PIN 17   // RCLK/STB
-#define CLOCK_PIN 16   // SCLK/CLK
-#define UNUSED_PIN 7   // MISO unused
-#define UNUSED_PIN_2 6 // SS unused
+//#define SS_PIN          // unused
 #define STATUS_LED_PIN 5
+#define LATCH_PIN 16      // RCLK/STB
+#define OE_PIN 17         // !OE, can be tied to GND if need to save pin
+#define DATA_PIN 18       // MOSI/IN
+//#define MISO_PIN 19     // unused
+#define CLOCK_PIN 20      // SCLK/CLK
 
 void busyDelay(unsigned long delayCount);
 void shiftOutWithDelay(uint8_t dataPin, uint8_t clockPin, uint8_t bitOrder, uint8_t val);
@@ -48,8 +48,6 @@ void initScan()
   digitalWrite(LATCH_PIN, LOW);
   digitalWrite(CLOCK_PIN, LOW);
 
-  // SPI.pins(DATA_PIN, UNUSED_PIN, CLOCK_PIN, UNUSED_PIN_2);
-  // SPI.swap(0, 1, 2, 3); // swap pins to match the wiring
   // SPI.begin();
 
   // Configure Timer B (TCA0) for CTC mode at 8kHz from 10MHz
@@ -137,8 +135,8 @@ ISR(TCB0_INT_vect)
     rowSelect = ~(0x01 << (NUM_ROWS - curLine));
   }
 
-  // SPI.transfer(rowData);
-  // SPI.transfer(rowSelect);
+  //SPI.transfer(rowData);
+  //SPI.transfer(rowSelect);
   shiftOut(DATA_PIN, CLOCK_PIN, LSBFIRST, rowData);
   shiftOut(DATA_PIN, CLOCK_PIN, LSBFIRST, rowSelect);
   //shiftOutWithDelay(DATA_PIN, CLOCK_PIN, LSBFIRST, rowData);
