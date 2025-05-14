@@ -1,13 +1,11 @@
-// TODO: below TODO needs SPI, do that first
-// TODO: try this lib https://github.com/michaelkamprath/ShiftRegisterLEDMatrixLib
-
 #include <tinyNeoPixel_static.h>
 #include <Wire.h>
 
 #include "draw.h"
 #include "scan.h"
 
-#define I2C_ADDRESS 0x13
+#define I2C_ADDRESS 0x15
+#define STATUS_LED_PIN 5
 #define SWITCH_PIN 15
 
 #define MATRIX_HEIGHT NUM_ROWS
@@ -17,31 +15,38 @@
 #define MIN_UPDATE_INTERVAL 5
 #define MAX_UPDATE_INTERVAL 500
 
+// i2c
+char buffer[MAX_MESSAGE_SIZE];
+size_t bufferIndex = 0;
+bool statusLed = false;
+
 // message
 char message[MAX_MESSAGE_SIZE];
-int messageWidth;
-int x = NUM_COLS;
-int y = NUM_ROWS;
+int16_t messageWidth;
+int16_t x = NUM_COLS;
+int16_t y = NUM_ROWS;
 
-volatile bool i2cDisplay = true;
-volatile bool switchDisplay;
+// both need to be on for scan display to be on
+volatile bool display = true;
+volatile bool switchState;
 
 // updates/timing
-unsigned long drawUpdateInterval = 300;
+unsigned long drawUpdateInterval = 100;
 unsigned long lastDrawUpdate = 0;
+unsigned long lastI2cMessage = 0;
 
-bool setDisplay(bool i2cDisplay)
+
+bool setDisplay(bool display)
 {
-  switchDisplay = digitalRead(SWITCH_PIN);
-
-  bool display = i2cDisplay && switchDisplay;
-  setScanDisplay(display);
-  return display;
+  switchState = digitalRead(SWITCH_PIN);
+  bool scanDisplayState = display && switchState;
+  scanDisplay(scanDisplayState);
+  return scanDisplayState;
 }
 
 bool setDisplay()
 {
-  return setDisplay(i2cDisplay);
+  return setDisplay(display);
 }
 
 void setMessage(const char *newMessage)
@@ -54,11 +59,12 @@ void setMessage(const char *newMessage)
 
 void receiveEvent(int bytesReceived)
 {
+  statusLed = true;
+  digitalWrite(STATUS_LED_PIN, !statusLed);
+  lastI2cMessage = millis();
+
   if (bytesReceived < 2)
     return;
-
-  static char buffer[MAX_MESSAGE_SIZE];
-  static int bufferIndex = 0;
 
   uint8_t command = Wire.read();
   
@@ -103,34 +109,26 @@ void receiveEvent(int bytesReceived)
   // getState
   else if (command == 0x03)
   {
-    Wire.write(switchDisplay);
-  }
-}
-
-void drawPixel(uint16_t x, uint16_t y, uint32_t color)
-{
-  if (x < MATRIX_WIDTH && y < MATRIX_HEIGHT)
-  {
-    // uint16_t flippedX = MATRIX_WIDTH - 1 - x;
-    // uint16_t flippedY = MATRIX_HEIGHT - 1 - y;
-    // matrix.setPixelColor(flippedY * MATRIX_WIDTH + flippedX, color);
-    //displayBuffer[y] |= (1 << x);
+    Wire.write(switchState);
   }
 }
 
 void setup()
 {
-  Wire.begin(I2C_ADDRESS);
-  Wire.onReceive(receiveEvent);
+  pinMode(STATUS_LED_PIN, OUTPUT);
+  digitalWrite(STATUS_LED_PIN, false);
 
   pinMode(SWITCH_PIN, INPUT_PULLUP);
 
-  pinMode(STATUS_LED_PIN, OUTPUT);
-  digitalWrite(STATUS_LED_PIN, HIGH);
+  Wire.begin(I2C_ADDRESS);
+  Wire.onReceive(receiveEvent);
 
-  setMessage("test");
+  setMessage("From a wild weird clime that lieth, sublime; out of Space, out of Time.");
 
-  initScan();
+  scanInit();
+
+  delay(500);
+  digitalWrite(STATUS_LED_PIN, true);
 }
 
 void loop()
@@ -140,15 +138,22 @@ void loop()
     return;
   }
 
+  // status LED turns off one second after receiving I2C message
+  if (statusLed && millis() - lastI2cMessage > 1000)
+  {
+    statusLed = false;
+    digitalWrite(STATUS_LED_PIN, !statusLed);
+  }
+
   if (!setDisplay())
   {
     delay(100);
     return;
   }
   
-  // TODO: Update draw buffer
-  // drawString(x, MATRIX_HEIGHT - 2, MATRIX_WIDTH, MATRIX_HEIGHT, "test", true);
-  scroll();
+  scanClear();
+  drawString(x, MATRIX_HEIGHT - 2, MATRIX_WIDTH, MATRIX_HEIGHT, message, true);
+  scanShow();
   lastDrawUpdate = millis();
 
   if (--x < -messageWidth)

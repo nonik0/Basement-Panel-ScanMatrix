@@ -6,34 +6,49 @@
 #define NUM_ROWS 8
 #define NUM_COLS 8
 #define NUM_LEDS 64
-#define NUM_BLANK_CYCLES 3
+#define NUM_BLANK_CYCLES 2 // number of cycles between each row drawn
 
-//#define SS_PIN          // unused
-#define STATUS_LED_PIN 5
-#define LATCH_PIN 16      // RCLK/STB
-#define OE_PIN 17         // !OE, can be tied to GND if need to save pin
-//#define DATA_PIN 18       // MOSI/IN
-//#define MISO_PIN 19     // unused
-//#define CLOCK_PIN 20      // SCLK/CLK
+// #define SS_PIN          // unused
+#define LATCH_PIN 16 // RCLK/STB
+#define OE_PIN 17    // !OE, can be tied to GND if need to save pin
+// #define DATA_PIN 18       // MOSI/IN
+// #define MISO_PIN 19     // unused
+// #define CLOCK_PIN 20      // SCLK/CLK
 
-volatile uint8_t displayBuffer[NUM_ROWS] = {
-  0b00000000,
-  0b00000000,
-  0b00100100,
-  0b00000000,
-  0b00000000,
-  0b00100100,
-  0b00011000,
-  0b00000000};
+uint8_t drawBuffer[NUM_ROWS]; // draw updates go here
+volatile uint8_t scanBuffer[NUM_ROWS]; // ISR shifts out data from this, copies new data from drawBuffer
+
+bool scanOutputEnable;
 volatile int curLine = 0;
-volatile int blankCycles = 0; // between each line cycle
-bool scanDisplay;
-volatile int scrollIndex;
+volatile int blankCycles = 0; // cycles to shift out off data between each row drawn
+volatile bool drawUpdate = false; // flag to signal ISR to copy new data after cur frame is drawn
 
-volatile int statusCycleCount = 0;
-volatile int statusCycleReset = 100;
+inline void scanClear()
+{
+  for (int i = 0; i < NUM_ROWS; i++)
+  {
+    drawBuffer[i] = 0;
+  }
+}
 
-void initScan()
+inline void scanDisplay(bool displayState)
+{
+  scanOutputEnable = displayState; // update the display state
+  digitalWrite(OE_PIN, !scanOutputEnable);
+}
+
+inline void scanDrawPixel(int x, int y, bool on)
+{
+  if (x < 0 || x >= NUM_COLS || y < 0 || y >= NUM_ROWS)
+    return;
+
+  if (on)
+    drawBuffer[y] |= (1 << x);
+  else
+    drawBuffer[y] &= ~(1 << x);
+}
+
+void scanInit()
 {
   pinMode(OE_PIN, OUTPUT);
   pinMode(LATCH_PIN, OUTPUT);
@@ -45,71 +60,43 @@ void initScan()
   // Configure Timer B (TCA0) for CTC mode at 8kHz from 10MHz
   TCB0.CTRLA = TCB_ENABLE_bm | TCB_CLKSEL_CLKDIV2_gc;
   TCB0.CTRLB = TCB_CNTMODE_INT_gc; // CTC mode
-  TCB0.CCMP = 1249;                // (20Mhz / 2) / 1250 = 8kHz
+  TCB0.CCMP = 1249 * 2;            // (20Mhz / 2) / 1250 = 8kHz
   TCB0.INTCTRL = TCB_CAPT_bm;      // Enable interrupt on capture
 }
 
-void clear() {
-  for (int i = 0; i < NUM_ROWS; i++)
-  {
-    displayBuffer[i] = 0;
-  }
-}
-
-inline void setScanDisplay(bool displayState)
+inline void scanShow()
 {
-  scanDisplay = displayState; // update the display state
-  digitalWrite(OE_PIN, !scanDisplay);
-}
-
-inline void scroll()
-{
-  scrollIndex = (scrollIndex + 1) % NUM_COLS;
+  drawUpdate = true;
 }
 
 ISR(TCB0_INT_vect)
 {
-  // clear the interrupt flag
+  // clear interrupt flag
   TCB0.INTFLAGS = TCB_CAPT_bm;
 
-  // blink status to indicate the scan interrupt is running
-  if (statusCycleCount++ >= statusCycleReset)
-  {
-    bool statusLedState = digitalRead(STATUS_LED_PIN);
-    digitalWrite(STATUS_LED_PIN, !statusLedState);
-
-    statusCycleCount = 0;
-    statusCycleReset = statusLedState ? 4000 : 2000;
-  }
-
-  // reduce frequency by factor of 8
-  if (statusCycleCount % 4 != 0)
-  {
-    return;
-  }
-
-  uint8_t rowData, rowSelect;
-  if (blankCycles > 0 || !scanDisplay)
-  {
-    rowData = 0xFF;
-    rowSelect = 0xFF;
-  }
-  else
-  {
-    rowData = ~displayBuffer[curLine];
-    rowData = (rowData << scrollIndex) | (rowData >> (NUM_COLS - scrollIndex));
-    rowSelect = ~(0x01 << curLine);
-  }
-
+  // shift out row data
+  bool blankFrame = blankCycles > 0 || !scanOutputEnable;
+  uint8_t rowData = blankFrame ? 0xFF : ~scanBuffer[curLine];
+  uint8_t rowSelect = blankFrame ? 0xFF : ~(0x01 << curLine);
   SPI.transfer(rowData);
   SPI.transfer(rowSelect);
   digitalWrite(LATCH_PIN, LOW);
   digitalWrite(LATCH_PIN, HIGH);
 
-  blankCycles--;
-  if (blankCycles < 0)
+  // update the current line and blank cycles
+  if (--blankCycles < 0)
   {
     curLine = (curLine + 1) % NUM_ROWS;
     blankCycles = NUM_BLANK_CYCLES;
+  }
+
+  // swap in new frame if available
+  if (drawUpdate && curLine == 0 && blankCycles == NUM_BLANK_CYCLES)
+  {
+    for (int i = 0; i < NUM_ROWS; i++)
+    {
+      scanBuffer[i] = drawBuffer[i];
+    }
+    drawUpdate = false;
   }
 }
