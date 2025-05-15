@@ -15,26 +15,43 @@
 // #define MISO_PIN 19     // unused
 // #define CLOCK_PIN 20      // SCLK/CLK
 
-uint8_t drawBuffer[NUM_ROWS]; // draw updates go here
-volatile uint8_t scanBuffer[NUM_ROWS]; // ISR shifts out data from this, copies new data from drawBuffer
+// scroll mode consts/variables
+volatile int scrollIndex = 0;
+uint32_t scrollBuffer[NUM_ROWS] = {
+    0b00011000000011110000000111100000,
+    0b00111100000111111000001100110000,
+    0b11010111000111111000011000011000,
+    0b01111110001111111100001100110000,
+    0b00111100001111111100000111100000,
+    0b01111110000100001000010011001000,
+    0b11100111000100001000011011011000,
+    0b11000011000011110000000111100000,
+};
 
-bool scanOutputEnable;
+// draw mode variables
+volatile bool drawModeActive = true;   // I2C updates => flag for mode: scroll=false, draw=true
+volatile bool drawBufferActive = true; // ISR updates => changes when frame is complete
+uint8_t drawUpdateBuffer[NUM_ROWS];    // draw updates go here
+volatile uint8_t drawBuffer[NUM_ROWS]; // ISR shifts out data from this, copies new data from drawBuffer
+
+// ISR state variables
+volatile bool bufferUpdate = false; // flag to signal ISR that buffer needs to change/be updated
 volatile int curLine = 0;
-volatile int blankCycles = 0; // cycles to shift out off data between each row drawn
-volatile bool drawUpdate = false; // flag to signal ISR to copy new data after cur frame is drawn
+volatile int blankCycles = 0; // off cycles between each line write
+bool scanDisplay;
 
 inline void scanClear()
 {
   for (int i = 0; i < NUM_ROWS; i++)
   {
-    drawBuffer[i] = 0;
+    drawUpdateBuffer[i] = 0;
   }
 }
 
-inline void scanDisplay(bool displayState)
+inline void scanSetDisplayState(bool displayState)
 {
-  scanOutputEnable = displayState; // update the display state
-  digitalWrite(OE_PIN, !scanOutputEnable);
+  scanDisplay = displayState;
+  digitalWrite(OE_PIN, !scanDisplay);
 }
 
 inline void scanDrawPixel(int x, int y, bool on)
@@ -43,9 +60,18 @@ inline void scanDrawPixel(int x, int y, bool on)
     return;
 
   if (on)
-    drawBuffer[y] |= (1 << x);
+    drawUpdateBuffer[y] |= (1 << x);
   else
-    drawBuffer[y] &= ~(1 << x);
+    drawUpdateBuffer[y] &= ~(1 << x);
+}
+
+inline void scanSetDrawMode(bool isActive)
+{
+  if (drawModeActive != isActive)
+  {
+    drawModeActive = isActive;
+    bufferUpdate = true;
+  }
 }
 
 void scanInit()
@@ -66,7 +92,12 @@ void scanInit()
 
 inline void scanShow()
 {
-  drawUpdate = true;
+  bufferUpdate = true;
+}
+
+inline void scroll()
+{
+  scrollIndex = (scrollIndex + 1) % NUM_COLS;
 }
 
 ISR(TCB0_INT_vect)
@@ -74,10 +105,29 @@ ISR(TCB0_INT_vect)
   // clear interrupt flag
   TCB0.INTFLAGS = TCB_CAPT_bm;
 
+  // calculate row data and select
+  uint16_t rowData, rowSelect;
+  if (blankCycles > 0 || !scanDisplay)
+  {
+    rowData = 0xFF;
+    rowSelect = 0xFF;
+  }
+  else
+  {
+    if (drawBufferActive)
+    {
+      rowData = ~drawBuffer[curLine];
+    }
+    else
+    {
+      uint32_t fullRowData = ~scrollBuffer[curLine];
+      rowData = (fullRowData << scrollIndex) | (fullRowData >> (NUM_COLS - scrollIndex));
+      rowSelect = ~(0x01 << curLine);
+    }
+    rowSelect = ~(0x01 << curLine);
+  }
+
   // shift out row data
-  bool blankFrame = blankCycles > 0 || !scanOutputEnable;
-  uint8_t rowData = blankFrame ? 0xFF : ~scanBuffer[curLine];
-  uint8_t rowSelect = blankFrame ? 0xFF : ~(0x01 << curLine);
   SPI.transfer(rowData);
   SPI.transfer(rowSelect);
   digitalWrite(LATCH_PIN, LOW);
@@ -91,12 +141,19 @@ ISR(TCB0_INT_vect)
   }
 
   // swap in new frame if available
-  if (drawUpdate && curLine == 0 && blankCycles == NUM_BLANK_CYCLES)
+  if (bufferUpdate && curLine == 0 && blankCycles == NUM_BLANK_CYCLES)
   {
-    for (int i = 0; i < NUM_ROWS; i++)
+    // update active buffer
+    drawBufferActive = drawModeActive;
+
+    if (drawBufferActive)
     {
-      scanBuffer[i] = drawBuffer[i];
+      for (int i = 0; i < NUM_ROWS; i++)
+      {
+        drawBuffer[i] = drawUpdateBuffer[i];
+      }
     }
-    drawUpdate = false;
+
+    bufferUpdate = false;
   }
 }

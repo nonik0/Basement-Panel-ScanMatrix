@@ -11,7 +11,7 @@
 #define MATRIX_HEIGHT NUM_ROWS
 #define MATRIX_WIDTH NUM_COLS
 
-#define MAX_MESSAGE_SIZE 160
+#define MAX_MESSAGE_SIZE 140
 #define MIN_UPDATE_INTERVAL 5
 #define MAX_UPDATE_INTERVAL 500
 
@@ -28,7 +28,7 @@ int16_t y = NUM_ROWS;
 
 // both need to be on for scan display to be on
 volatile bool display = true;
-volatile bool switchState;
+bool drawMode = true;
 
 // updates/timing
 unsigned long drawUpdateInterval = 100;
@@ -38,10 +38,12 @@ unsigned long lastStatusUpdate = 0;
 
 bool setDisplay()
 {
-  switchState = digitalRead(SWITCH_PIN);
-  bool scanDisplayState = display && switchState;
-  scanDisplay(scanDisplayState);
-  return scanDisplayState;
+  scanSetDisplayState(display);
+  return display;
+  // switchState = digitalRead(SWITCH_PIN);
+  // bool scanDisplayState = display && switchState;
+  // scanDisplay(scanDisplayState);
+  // return scanDisplayState;
 }
 
 void setMessage(const char *newMessage)
@@ -112,12 +114,18 @@ void receiveEvent(int bytesReceived)
   // getState
   else if (command == 0x03)
   {
-    Wire.write(switchState);
+    // TODO: when more read command implement lastCommand for requestEvent filtering
   }
   else
   {
     statusBlinks = 10;
   }
+}
+
+void requestEvent()
+{
+  bool switchState = digitalRead(SWITCH_PIN);
+  Wire.write((uint8_t)switchState);
 }
 
 void setup()
@@ -127,11 +135,15 @@ void setup()
 
   pinMode(SWITCH_PIN, INPUT_PULLUP);
 
-  //Wire.swap(0);
   Wire.begin(I2C_ADDRESS);
   Wire.onReceive(receiveEvent);
+  Wire.onRequest(requestEvent);
 
-  setMessage("From a wild weird clime that lieth, sublime; out of Space, out of Time.");
+  if (drawMode)
+  {
+    scanSetDrawMode(drawMode);
+    setMessage("From a wild weird clime that lieth, sublime; out of Space, out of Time.");
+  }
 
   scanInit();
 
@@ -157,12 +169,12 @@ void loop()
       if (statusInitial)
       {
         statusInitial = false;
-        statusUpdateInterval = 500;
+        statusUpdateInterval = 300;
       }
     }
     else
     {
-      statusUpdateInterval = 1000;
+      statusUpdateInterval = 500;
     }
   }
 
@@ -171,13 +183,25 @@ void loop()
     return;
   }
 
-  scanClear();
-  drawString(x, MATRIX_HEIGHT - 2, MATRIX_WIDTH, MATRIX_HEIGHT, message, true);
-  scanShow();
-  lastDrawUpdate = millis();
-
-  if (--x < -messageWidth)
+  if (drawMode)
   {
-    x = MATRIX_WIDTH;
+    scanClear();
+    drawString(x, MATRIX_HEIGHT - 2, MATRIX_WIDTH, MATRIX_HEIGHT, message, true);
+    scanShow();
+    lastDrawUpdate = millis();
+
+    if (--x < -messageWidth)
+    {
+      x = MATRIX_WIDTH;
+    }
+  }
+  else
+  {
+    bool switchState = digitalRead(SWITCH_PIN);
+    if (switchState)
+    {
+      scroll();
+    }
+    scanShow();
   }
 }
