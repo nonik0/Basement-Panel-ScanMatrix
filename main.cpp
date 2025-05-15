@@ -28,22 +28,18 @@ int16_t y = NUM_ROWS;
 
 // both need to be on for scan display to be on
 volatile bool display = true;
-bool drawMode = true;
+bool drawMode = false;
 
 // updates/timing
-unsigned long drawUpdateInterval = 100;
+unsigned long drawUpdateInterval = 120;
 unsigned long lastDrawUpdate = 0;
-unsigned long statusUpdateInterval = 1000;
+unsigned long statusUpdateInterval = 500;
 unsigned long lastStatusUpdate = 0;
 
 bool setDisplay()
 {
   scanSetDisplayState(display);
   return display;
-  // switchState = digitalRead(SWITCH_PIN);
-  // bool scanDisplayState = display && switchState;
-  // scanDisplay(scanDisplayState);
-  // return scanDisplayState;
 }
 
 void setMessage(const char *newMessage)
@@ -182,13 +178,13 @@ void loop()
   {
     return;
   }
+  lastDrawUpdate = millis();
 
   if (drawMode)
   {
     scanClear();
     drawString(x, MATRIX_HEIGHT - 2, MATRIX_WIDTH, MATRIX_HEIGHT, message, true);
     scanShow();
-    lastDrawUpdate = millis();
 
     if (--x < -messageWidth)
     {
@@ -202,6 +198,5 @@ void loop()
     {
       scroll();
     }
-    scanShow();
   }
 }

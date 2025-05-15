@@ -16,23 +16,24 @@
 // #define CLOCK_PIN 20      // SCLK/CLK
 
 // scroll mode consts/variables
+const int ScrollWidth = 32;
 volatile int scrollIndex = 0;
 uint32_t scrollBuffer[NUM_ROWS] = {
     0b00011000000011110000000111100000,
-    0b00111100000111111000001100110000,
-    0b11010111000111111000011000011000,
+    0b00011000000111111000001100110000,
+    0b11111111001111111100001000010000,
     0b01111110001111111100001100110000,
     0b00111100001111111100000111100000,
     0b01111110000100001000010011001000,
-    0b11100111000100001000011011011000,
+    0b01100110000100001000011111111000,
     0b11000011000011110000000111100000,
 };
 
 // draw mode variables
-volatile bool drawModeActive = true;   // I2C updates => flag for mode: scroll=false, draw=true
-volatile bool drawBufferActive = true; // ISR updates => changes when frame is complete
-uint8_t drawUpdateBuffer[NUM_ROWS];    // draw updates go here
-volatile uint8_t drawBuffer[NUM_ROWS]; // ISR shifts out data from this, copies new data from drawBuffer
+volatile bool drawModeActive = false;   // I2C updates => flag for mode: scroll=false, draw=true
+volatile bool drawBufferActive = false; // ISR updates => changes when frame is complete
+uint8_t drawUpdateBuffer[NUM_ROWS];     // draw updates go here
+volatile uint8_t drawBuffer[NUM_ROWS];  // ISR shifts out data from this, copies new data from drawBuffer
 
 // ISR state variables
 volatile bool bufferUpdate = false; // flag to signal ISR that buffer needs to change/be updated
@@ -40,7 +41,7 @@ volatile int curLine = 0;
 volatile int blankCycles = 0; // off cycles between each line write
 bool scanDisplay;
 
-inline void scanClear()
+void scanClear()
 {
   for (int i = 0; i < NUM_ROWS; i++)
   {
@@ -48,13 +49,13 @@ inline void scanClear()
   }
 }
 
-inline void scanSetDisplayState(bool displayState)
+void scanSetDisplayState(bool displayState)
 {
   scanDisplay = displayState;
   digitalWrite(OE_PIN, !scanDisplay);
 }
 
-inline void scanDrawPixel(int x, int y, bool on)
+void scanDrawPixel(int x, int y, bool on)
 {
   if (x < 0 || x >= NUM_COLS || y < 0 || y >= NUM_ROWS)
     return;
@@ -65,7 +66,7 @@ inline void scanDrawPixel(int x, int y, bool on)
     drawUpdateBuffer[y] &= ~(1 << x);
 }
 
-inline void scanSetDrawMode(bool isActive)
+void scanSetDrawMode(bool isActive)
 {
   if (drawModeActive != isActive)
   {
@@ -90,14 +91,14 @@ void scanInit()
   TCB0.INTCTRL = TCB_CAPT_bm;      // Enable interrupt on capture
 }
 
-inline void scanShow()
+void scanShow()
 {
   bufferUpdate = true;
 }
 
-inline void scroll()
+void scroll()
 {
-  scrollIndex = (scrollIndex + 1) % NUM_COLS;
+  scrollIndex = (scrollIndex + 1) % ScrollWidth;
 }
 
 ISR(TCB0_INT_vect)
@@ -106,7 +107,7 @@ ISR(TCB0_INT_vect)
   TCB0.INTFLAGS = TCB_CAPT_bm;
 
   // calculate row data and select
-  uint16_t rowData, rowSelect;
+  uint8_t rowData, rowSelect;
   if (blankCycles > 0 || !scanDisplay)
   {
     rowData = 0xFF;
@@ -121,8 +122,7 @@ ISR(TCB0_INT_vect)
     else
     {
       uint32_t fullRowData = ~scrollBuffer[curLine];
-      rowData = (fullRowData << scrollIndex) | (fullRowData >> (NUM_COLS - scrollIndex));
-      rowSelect = ~(0x01 << curLine);
+      rowData = ((fullRowData << scrollIndex) | (fullRowData >> (ScrollWidth - scrollIndex))) & 0xFF;
     }
     rowSelect = ~(0x01 << curLine);
   }
