@@ -16,9 +16,9 @@
 #define MAX_UPDATE_INTERVAL 500
 
 // i2c
-char buffer[MAX_MESSAGE_SIZE];
-size_t bufferIndex = 0;
 bool statusLed = false;
+bool statusInitial = false;
+uint8_t statusBlinks = 0; // number of extra short blinks after long "ACK" blink
 
 // message
 char message[MAX_MESSAGE_SIZE];
@@ -33,20 +33,15 @@ volatile bool switchState;
 // updates/timing
 unsigned long drawUpdateInterval = 100;
 unsigned long lastDrawUpdate = 0;
-unsigned long lastI2cMessage = 0;
+unsigned long statusUpdateInterval = 1000;
+unsigned long lastStatusUpdate = 0;
 
-
-bool setDisplay(bool display)
+bool setDisplay()
 {
   switchState = digitalRead(SWITCH_PIN);
   bool scanDisplayState = display && switchState;
   scanDisplay(scanDisplayState);
   return scanDisplayState;
-}
-
-bool setDisplay()
-{
-  return setDisplay(display);
 }
 
 void setMessage(const char *newMessage)
@@ -61,18 +56,26 @@ void receiveEvent(int bytesReceived)
 {
   statusLed = true;
   digitalWrite(STATUS_LED_PIN, !statusLed);
-  lastI2cMessage = millis();
+  lastStatusUpdate = millis();
+  statusBlinks = 0;
+  statusInitial = true;
 
   if (bytesReceived < 2)
+  {
     return;
+  }
+
+  static char buffer[MAX_MESSAGE_SIZE];
+  static int bufferIndex = 0;
 
   uint8_t command = Wire.read();
-  
+  statusBlinks = command + 1; // use value to blink status LED
+
   // setDisplay
   if (command == 0x00)
   {
-    bool i2cDisplay = Wire.read();
-    setDisplay(i2cDisplay);
+    display = Wire.read();
+    setDisplay();
   }
   // setMessage
   else if (command == 0x01)
@@ -111,6 +114,10 @@ void receiveEvent(int bytesReceived)
   {
     Wire.write(switchState);
   }
+  else
+  {
+    statusBlinks = 10;
+  }
 }
 
 void setup()
@@ -120,6 +127,7 @@ void setup()
 
   pinMode(SWITCH_PIN, INPUT_PULLUP);
 
+  //Wire.swap(0);
   Wire.begin(I2C_ADDRESS);
   Wire.onReceive(receiveEvent);
 
@@ -133,24 +141,36 @@ void setup()
 
 void loop()
 {
-  if (millis() - lastDrawUpdate < drawUpdateInterval)
+  // status LED indicates when I2C message is received, long blink first, then short blink count indicates status
+  if ((statusBlinks > 0 || statusLed) && millis() - lastStatusUpdate > statusUpdateInterval)
   {
-    return;
-  }
-
-  // status LED turns off one second after receiving I2C message
-  if (statusLed && millis() - lastI2cMessage > 1000)
-  {
-    statusLed = false;
+    statusLed = !statusLed;
     digitalWrite(STATUS_LED_PIN, !statusLed);
+    lastStatusUpdate = millis();
+
+    if (statusBlinks > 0)
+    {
+      statusBlinks -= statusLed ? 1 : 0;
+      statusUpdateInterval = statusLed ? 100 : 50;
+
+      // longer gap between long and short blinks
+      if (statusInitial)
+      {
+        statusInitial = false;
+        statusUpdateInterval = 500;
+      }
+    }
+    else
+    {
+      statusUpdateInterval = 1000;
+    }
   }
 
-  if (!setDisplay())
+  if (millis() - lastDrawUpdate < drawUpdateInterval || !setDisplay())
   {
-    delay(100);
     return;
   }
-  
+
   scanClear();
   drawString(x, MATRIX_HEIGHT - 2, MATRIX_WIDTH, MATRIX_HEIGHT, message, true);
   scanShow();
