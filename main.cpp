@@ -11,9 +11,24 @@
 #define MATRIX_HEIGHT NUM_ROWS
 #define MATRIX_WIDTH NUM_COLS
 
-#define MAX_MESSAGE_SIZE 140
 #define MIN_UPDATE_INTERVAL 5
 #define MAX_UPDATE_INTERVAL 500
+#define STATUS_UPDATE_INTERVAL 500
+
+#define DISPLAY_MODE_ANIMATION 0x0
+#define DISPLAY_MODE_SCROLLING_TEXT 0x1
+#define DISPLAY_MODE_STATIC_TEXT 0x2
+
+#if defined(MATRIX_16X16)
+#define DEFAULT_DRAW_UPDATE_INTERVAL 100
+#define MAX_MESSAGE_SIZE 10
+#define MESSAGE_Y_OFFSET 2
+#elif defined(MATRIX_8X8)
+#define DEFAULT_DRAW_UPDATE_INTERVAL 120
+#define MAX_MESSAGE_SIZE 140
+#define MESSAGE_Y_OFFSET 2
+#endif
+#define MESSAGE_X_OFFSET 2
 
 // i2c
 bool statusLed = false;
@@ -28,15 +43,16 @@ int16_t y = NUM_ROWS;
 
 // both need to be on for scan display to be on
 volatile bool display = true;
-bool drawMode = false;
+uint8_t displayMode = DISPLAY_MODE_ANIMATION;
+bool drawModeUpdate = true;
 
 // updates/timing
-unsigned long drawUpdateInterval = 120;
+unsigned long drawUpdateInterval = DEFAULT_DRAW_UPDATE_INTERVAL;
 unsigned long lastDrawUpdate = 0;
-unsigned long statusUpdateInterval = 500;
+unsigned long statusUpdateInterval = STATUS_UPDATE_INTERVAL;
 unsigned long lastStatusUpdate = 0;
 
-bool setDisplay()
+bool setDisplayState()
 {
   scanSetDisplayState(display);
   return display;
@@ -48,9 +64,10 @@ void setMessage(const char *newMessage)
   message[MAX_MESSAGE_SIZE - 1] = '\0';
   messageWidth = getTextWidth(message);
   x = MATRIX_WIDTH;
+  drawModeUpdate = true;
 }
 
-void receiveEvent(int bytesReceived)
+void handleOnReceive(int bytesReceived)
 {
   statusLed = true;
   digitalWrite(STATUS_LED_PIN, !statusLed);
@@ -73,7 +90,7 @@ void receiveEvent(int bytesReceived)
   if (command == 0x00)
   {
     display = Wire.read();
-    setDisplay();
+    setDisplayState();
   }
   // setMessage
   else if (command == 0x01)
@@ -106,11 +123,14 @@ void receiveEvent(int bytesReceived)
   {
     uint8_t scrollSpeed = Wire.read();
     drawUpdateInterval = map(constrain(scrollSpeed, 0, 100), 100, 0, MIN_UPDATE_INTERVAL, MAX_UPDATE_INTERVAL);
+    drawModeUpdate = true;
   }
-  // getState
+  // setDisplayMode: 0x0: scroll animation, 0x1: scrolling text, 0x2: static text
   else if (command == 0x03)
   {
-    // TODO: when more read command implement lastCommand for requestEvent filtering
+    displayMode = Wire.read();
+    drawModeUpdate = true;
+    scanSetDisplayMode(displayMode != DISPLAY_MODE_ANIMATION);
   }
   else
   {
@@ -118,7 +138,7 @@ void receiveEvent(int bytesReceived)
   }
 }
 
-void requestEvent()
+void handleOnRequest()
 {
   bool switchState = digitalRead(SWITCH_PIN);
   Wire.write((uint8_t)switchState);
@@ -132,12 +152,12 @@ void setup()
   pinMode(SWITCH_PIN, INPUT_PULLUP);
 
   Wire.begin(I2C_ADDRESS);
-  Wire.onReceive(receiveEvent);
-  Wire.onRequest(requestEvent);
+  Wire.onReceive(handleOnReceive);
+  Wire.onRequest(handleOnRequest);
 
-  if (drawMode)
+  if (displayMode != DISPLAY_MODE_ANIMATION)
   {
-    scanSetDrawMode(drawMode);
+    scanSetDisplayMode(true);
     setMessage("From a wild weird clime that lieth, sublime; out of Space, out of Time.");
   }
 
@@ -165,38 +185,51 @@ void loop()
       if (statusInitial)
       {
         statusInitial = false;
-        statusUpdateInterval = 300;
+        statusUpdateInterval = STATUS_UPDATE_INTERVAL >> 1;
       }
     }
     else
     {
-      statusUpdateInterval = 500;
+      statusUpdateInterval = STATUS_UPDATE_INTERVAL;
     }
   }
 
-  if (millis() - lastDrawUpdate < drawUpdateInterval || !setDisplay())
+  if (millis() - lastDrawUpdate < drawUpdateInterval || !setDisplayState())
   {
+    yield();
     return;
   }
   lastDrawUpdate = millis();
 
-  if (drawMode)
+  switch (displayMode)
   {
+  case DISPLAY_MODE_ANIMATION:
+    bool switchState = digitalRead(SWITCH_PIN);
+    if (switchState)
+    {
+      scroll();
+    }
+    break;
+
+  case DISPLAY_MODE_SCROLLING_TEXT:
     scanClear();
-    drawString(x, MATRIX_HEIGHT - 2, MATRIX_WIDTH, MATRIX_HEIGHT, message, true);
+    drawString(x, MATRIX_HEIGHT - MESSAGE_Y_OFFSET, MATRIX_WIDTH, MATRIX_HEIGHT, message, true);
     scanShow();
 
     if (--x < -messageWidth)
     {
       x = MATRIX_WIDTH;
     }
-  }
-  else
-  {
-    bool switchState = digitalRead(SWITCH_PIN);
-    if (switchState)
+    break;
+
+  case DISPLAY_MODE_STATIC_TEXT:
+    if (drawModeUpdate)
     {
-      scroll();
+      scanClear();
+      drawString(MESSAGE_X_OFFSET, MATRIX_HEIGHT - MESSAGE_Y_OFFSET, MATRIX_WIDTH, MATRIX_HEIGHT, message, true);
+      scanShow();
+      drawModeUpdate = false;
     }
+    break;
   }
 }
