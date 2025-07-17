@@ -1,9 +1,14 @@
 #pragma once
 
-#include "Picopixel.h"
 #include "scan.h"
 
+#if defined(MATRIX_16X16)
+#include "Font5x7FixedMono.h"
+const GFXfont FONT = Font5x7FixedMono;
+#elif defined(MATRIX_8X8)
+#include "Picopixel.h"
 const GFXfont FONT = Picopixel;
+#endif
 
 void drawPixel(int x, int y, bool on) {
   scanDrawPixel(x, y, on);

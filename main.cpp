@@ -14,43 +14,38 @@
 #define MIN_UPDATE_INTERVAL 5
 #define MAX_UPDATE_INTERVAL 500
 #define STATUS_UPDATE_INTERVAL 500
-
-#define DISPLAY_MODE_ANIMATION 0x0
-#define DISPLAY_MODE_SCROLLING_TEXT 0x1
-#define DISPLAY_MODE_STATIC_TEXT 0x2
+#define TEMP_MESSAGE_DURATION 5000
 
 #if defined(MATRIX_16X16)
 #define DEFAULT_DRAW_UPDATE_INTERVAL 100
 #define MAX_MESSAGE_SIZE 10
-#define MESSAGE_Y_OFFSET 2
+#define TEMP_MESSAGE_Y_OFFSET 5
 #elif defined(MATRIX_8X8)
 #define DEFAULT_DRAW_UPDATE_INTERVAL 120
 #define MAX_MESSAGE_SIZE 140
-#define MESSAGE_Y_OFFSET 2
+#define TEMP_MESSAGE_Y_OFFSET 2
 #endif
-#define MESSAGE_X_OFFSET 2
+#define TEMP_MESSAGE_X_OFFSET 3
 
 // i2c
-bool statusLed = false;
-bool statusInitial = false;
-uint8_t statusBlinks = 0; // number of extra short blinks after long "ACK" blink
+bool statusLedState = false;
+bool statusLedFirstBlink = false;
+uint8_t statusLedBlinks = 0; // number of extra short blinks after long "ACK" blink
 
 // message
 char message[MAX_MESSAGE_SIZE];
 int16_t messageWidth;
 int16_t x = NUM_COLS;
 int16_t y = NUM_ROWS;
+unsigned long lastTempMessage = 0; // time left for temporary message display
 
-// both need to be on for scan display to be on
+// display state
 volatile bool display = true;
-uint8_t displayMode = DISPLAY_MODE_ANIMATION;
-bool drawModeUpdate = true;
-
-// updates/timing
-unsigned long drawUpdateInterval = DEFAULT_DRAW_UPDATE_INTERVAL;
+bool scrollingTextMode = false;
 unsigned long lastDrawUpdate = 0;
-unsigned long statusUpdateInterval = STATUS_UPDATE_INTERVAL;
-unsigned long lastStatusUpdate = 0;
+unsigned long lastStatusLedUpdate = 0;
+unsigned long drawUpdateInterval = DEFAULT_DRAW_UPDATE_INTERVAL;
+unsigned long statusLedUpdateInterval = STATUS_UPDATE_INTERVAL;
 
 bool setDisplayState()
 {
@@ -64,16 +59,15 @@ void setMessage(const char *newMessage)
   message[MAX_MESSAGE_SIZE - 1] = '\0';
   messageWidth = getTextWidth(message);
   x = MATRIX_WIDTH;
-  drawModeUpdate = true;
 }
 
 void handleOnReceive(int bytesReceived)
 {
-  statusLed = true;
-  digitalWrite(STATUS_LED_PIN, !statusLed);
-  lastStatusUpdate = millis();
-  statusBlinks = 0;
-  statusInitial = true;
+  statusLedState = true;
+  digitalWrite(STATUS_LED_PIN, !statusLedState);
+  lastStatusLedUpdate = millis();
+  statusLedBlinks = 0;
+  statusLedFirstBlink = true;
 
   if (bytesReceived < 2)
   {
@@ -84,7 +78,7 @@ void handleOnReceive(int bytesReceived)
   static int bufferIndex = 0;
 
   uint8_t command = Wire.read();
-  statusBlinks = command + 1; // use value to blink status LED
+  statusLedBlinks = command + 1; // use value to blink status LED
 
   // setDisplay
   if (command == 0x00)
@@ -92,8 +86,8 @@ void handleOnReceive(int bytesReceived)
     display = Wire.read();
     setDisplayState();
   }
-  // setMessage
-  else if (command == 0x01)
+  // setMessage and showTempMessage
+  else if (command == 0x01 || command == 0x04)
   {
     // read chunk into buffer, discard extra bytes if past buffer size
     while (Wire.available())
@@ -114,7 +108,22 @@ void handleOnReceive(int bytesReceived)
         buffer[--bufferIndex] = '\0';
       }
 
-      setMessage(buffer);
+      if (command == 0x01)
+      {
+        setMessage(buffer);
+      }
+      else
+      {
+        // show temporary message
+        scanClear();
+        drawString(TEMP_MESSAGE_X_OFFSET, MATRIX_HEIGHT - TEMP_MESSAGE_Y_OFFSET, MATRIX_WIDTH, MATRIX_HEIGHT, buffer, true);
+        //drawString(0, 0, MATRIX_WIDTH, MATRIX_HEIGHT, buffer, true);
+        //drawString(0, MATRIX_HEIGHT, MATRIX_WIDTH, MATRIX_HEIGHT, buffer, true);
+        scanShow();
+
+        scanSetDisplayMode(true);
+        lastTempMessage = millis();
+      }
       bufferIndex = 0;
     }
   }
@@ -123,18 +132,16 @@ void handleOnReceive(int bytesReceived)
   {
     uint8_t scrollSpeed = Wire.read();
     drawUpdateInterval = map(constrain(scrollSpeed, 0, 100), 100, 0, MIN_UPDATE_INTERVAL, MAX_UPDATE_INTERVAL);
-    drawModeUpdate = true;
   }
-  // setDisplayMode: 0x0: scroll animation, 0x1: scrolling text, 0x2: static text
+  // setDisplayMode
   else if (command == 0x03)
   {
-    displayMode = Wire.read();
-    drawModeUpdate = true;
-    scanSetDisplayMode(displayMode != DISPLAY_MODE_ANIMATION);
+    scrollingTextMode = Wire.read();
+    scanSetDisplayMode(scrollingTextMode);
   }
   else
   {
-    statusBlinks = 10;
+    statusLedBlinks = 10;
   }
 }
 
@@ -155,9 +162,9 @@ void setup()
   Wire.onReceive(handleOnReceive);
   Wire.onRequest(handleOnRequest);
 
-  if (displayMode != DISPLAY_MODE_ANIMATION)
+  if (scrollingTextMode)
   {
-    scanSetDisplayMode(true);
+    scanSetDisplayMode(scrollingTextMode);
     setMessage("From a wild weird clime that lieth, sublime; out of Space, out of Time.");
   }
 
@@ -170,66 +177,63 @@ void setup()
 void loop()
 {
   // status LED indicates when I2C message is received, long blink first, then short blink count indicates status
-  if ((statusBlinks > 0 || statusLed) && millis() - lastStatusUpdate > statusUpdateInterval)
+  if ((statusLedBlinks > 0 || statusLedState) && millis() - lastStatusLedUpdate > statusLedUpdateInterval)
   {
-    statusLed = !statusLed;
-    digitalWrite(STATUS_LED_PIN, !statusLed);
-    lastStatusUpdate = millis();
+    statusLedState = !statusLedState;
+    digitalWrite(STATUS_LED_PIN, !statusLedState);
+    lastStatusLedUpdate = millis();
 
-    if (statusBlinks > 0)
+    if (statusLedBlinks > 0)
     {
-      statusBlinks -= statusLed ? 1 : 0;
-      statusUpdateInterval = statusLed ? 100 : 50;
+      statusLedBlinks -= statusLedState ? 1 : 0;
+      statusLedUpdateInterval = statusLedState ? (STATUS_UPDATE_INTERVAL >> 2) : (STATUS_UPDATE_INTERVAL >> 3);
 
-      // longer gap between long and short blinks
-      if (statusInitial)
+      // longer gap between first long blink and later short blinks
+      if (statusLedFirstBlink)
       {
-        statusInitial = false;
-        statusUpdateInterval = STATUS_UPDATE_INTERVAL >> 1;
+        statusLedFirstBlink = false;
+        statusLedUpdateInterval = STATUS_UPDATE_INTERVAL >> 1;
       }
     }
     else
     {
-      statusUpdateInterval = STATUS_UPDATE_INTERVAL;
+      statusLedUpdateInterval = STATUS_UPDATE_INTERVAL;
     }
   }
 
-  if (millis() - lastDrawUpdate < drawUpdateInterval || !setDisplayState())
+  // handle either scrolling message or scrolling animation
+  if ((lastTempMessage != 0 && millis() - lastTempMessage < TEMP_MESSAGE_DURATION) ||
+      millis() - lastDrawUpdate < drawUpdateInterval || !setDisplayState())
   {
     yield();
     return;
   }
   lastDrawUpdate = millis();
 
-  switch (displayMode)
-  {
-  case DISPLAY_MODE_ANIMATION:
-    bool switchState = digitalRead(SWITCH_PIN);
-    if (switchState)
-    {
-      scroll();
-    }
-    break;
+  // restore previous mode if temporary message is done
+  if (lastTempMessage > 0) {
+    scanSetDisplayMode(scrollingTextMode);
+    lastTempMessage = 0;
+  }
 
-  case DISPLAY_MODE_SCROLLING_TEXT:
+  // handle scrolling text or animation
+  if (scrollingTextMode)
+  {
     scanClear();
-    drawString(x, MATRIX_HEIGHT - MESSAGE_Y_OFFSET, MATRIX_WIDTH, MATRIX_HEIGHT, message, true);
+    drawString(x, MATRIX_HEIGHT - TEMP_MESSAGE_Y_OFFSET, MATRIX_WIDTH, MATRIX_HEIGHT, message, true);
     scanShow();
 
     if (--x < -messageWidth)
     {
       x = MATRIX_WIDTH;
     }
-    break;
-
-  case DISPLAY_MODE_STATIC_TEXT:
-    if (drawModeUpdate)
+  }
+  else
+  {
+    bool switchState = digitalRead(SWITCH_PIN);
+    if (switchState)
     {
-      scanClear();
-      drawString(MESSAGE_X_OFFSET, MATRIX_HEIGHT - MESSAGE_Y_OFFSET, MATRIX_WIDTH, MATRIX_HEIGHT, message, true);
-      scanShow();
-      drawModeUpdate = false;
+      scroll();
     }
-    break;
   }
 }
