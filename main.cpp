@@ -1,15 +1,14 @@
 #include <tinyNeoPixel_static.h>
 #include <Wire.h>
 
-#include "draw.h"
-#include "scan.h"
+#include "drawText.h"
+#include "scrollAnim.h"
+#include "scrollText.h"
+#include "scanMatrix.h"
 
 #define I2C_ADDRESS 0x15
 #define STATUS_LED_PIN 5
 #define SWITCH_PIN 15
-
-#define MATRIX_HEIGHT NUM_ROWS
-#define MATRIX_WIDTH NUM_COLS
 
 #define MIN_UPDATE_INTERVAL 5
 #define MAX_UPDATE_INTERVAL 500
@@ -18,48 +17,28 @@
 
 #if defined(MATRIX_16X16)
 #define DEFAULT_DRAW_UPDATE_INTERVAL 100
-#define MAX_MESSAGE_SIZE 10
-#define TEMP_MESSAGE_Y_OFFSET 5
 #elif defined(MATRIX_8X8)
 #define DEFAULT_DRAW_UPDATE_INTERVAL 120
-#define MAX_MESSAGE_SIZE 140
-#define TEMP_MESSAGE_Y_OFFSET 2
 #endif
-#define TEMP_MESSAGE_X_OFFSET 3
+
+enum Mode
+{
+  ScrollAnim,
+  ScrollText
+};
 
 // i2c
 bool statusLedState = false;
 bool statusLedFirstBlink = false;
 uint8_t statusLedBlinks = 0; // number of extra short blinks after long "ACK" blink
 
-// message
-char message[MAX_MESSAGE_SIZE];
-int16_t messageWidth;
-int16_t x = NUM_COLS;
-int16_t y = NUM_ROWS;
-unsigned long lastTempMessage = 0; // time left for temporary message display
-
 // display state
 volatile bool display = true;
-bool scrollingTextMode = false;
+Mode mode = Mode::ScrollAnim;
 unsigned long lastDrawUpdate = 0;
 unsigned long lastStatusLedUpdate = 0;
 unsigned long drawUpdateInterval = DEFAULT_DRAW_UPDATE_INTERVAL;
 unsigned long statusLedUpdateInterval = STATUS_UPDATE_INTERVAL;
-
-bool setDisplayState()
-{
-  scanSetDisplayState(display);
-  return display;
-}
-
-void setMessage(const char *newMessage)
-{
-  strncpy(message, newMessage, MAX_MESSAGE_SIZE - 1);
-  message[MAX_MESSAGE_SIZE - 1] = '\0';
-  messageWidth = getTextWidth(message);
-  x = MATRIX_WIDTH;
-}
 
 void handleOnReceive(int bytesReceived)
 {
@@ -84,7 +63,7 @@ void handleOnReceive(int bytesReceived)
   if (command == 0x00)
   {
     display = Wire.read();
-    setDisplayState();
+    scanDisplay(display);
   }
   // setMessage and showTempMessage
   else if (command == 0x01 || command == 0x04)
@@ -110,18 +89,15 @@ void handleOnReceive(int bytesReceived)
 
       if (command == 0x01)
       {
-        setMessage(buffer);
+        scrollTextSetMessage(buffer);
       }
       else
       {
         // show temporary message
         scanClear();
-        drawString(TEMP_MESSAGE_X_OFFSET, MATRIX_HEIGHT - TEMP_MESSAGE_Y_OFFSET, MATRIX_WIDTH, MATRIX_HEIGHT, buffer, true);
-        //drawString(0, 0, MATRIX_WIDTH, MATRIX_HEIGHT, buffer, true);
-        //drawString(0, MATRIX_HEIGHT, MATRIX_WIDTH, MATRIX_HEIGHT, buffer, true);
+        drawString(MESSAGE_X_OFFSET, MATRIX_HEIGHT - MESSAGE_Y_OFFSET, MATRIX_WIDTH, MATRIX_HEIGHT, buffer, true);
         scanShow();
 
-        scanSetDisplayMode(true);
         lastTempMessage = millis();
       }
       bufferIndex = 0;
@@ -136,8 +112,7 @@ void handleOnReceive(int bytesReceived)
   // setDisplayMode
   else if (command == 0x03)
   {
-    scrollingTextMode = Wire.read();
-    scanSetDisplayMode(scrollingTextMode);
+    mode = (Mode)Wire.read();
   }
   else
   {
@@ -162,13 +137,12 @@ void setup()
   Wire.onReceive(handleOnReceive);
   Wire.onRequest(handleOnRequest);
 
-  if (scrollingTextMode)
+  if (mode == Mode::ScrollText)
   {
-    scanSetDisplayMode(scrollingTextMode);
-    setMessage("From a wild weird clime that lieth, sublime; out of Space, out of Time.");
+    scrollTextSetMessage("From a wild weird clime that lieth, sublime; out of Space, out of Time.");
   }
-
   scanInit();
+  scanDisplay(display);
 
   delay(500);
   digitalWrite(STATUS_LED_PIN, true);
@@ -201,39 +175,25 @@ void loop()
     }
   }
 
-  // handle either scrolling message or scrolling animation
-  if ((lastTempMessage != 0 && millis() - lastTempMessage < TEMP_MESSAGE_DURATION) ||
-      millis() - lastDrawUpdate < drawUpdateInterval || !setDisplayState())
+  // check if ready to draw again
+  bool switchState = digitalRead(SWITCH_PIN);
+  if (millis() - lastDrawUpdate < drawUpdateInterval || !display || !switchState || (lastTempMessage != 0 && millis() - lastTempMessage < TEMP_MESSAGE_DURATION))
   {
     yield();
     return;
   }
   lastDrawUpdate = millis();
+  lastTempMessage = 0;
 
-  // restore previous mode if temporary message is done
-  if (lastTempMessage > 0) {
-    scanSetDisplayMode(scrollingTextMode);
-    lastTempMessage = 0;
-  }
-
-  // handle scrolling text or animation
-  if (scrollingTextMode)
+  // draw for current mode
+  switch (mode)
   {
-    scanClear();
-    drawString(x, MATRIX_HEIGHT - TEMP_MESSAGE_Y_OFFSET, MATRIX_WIDTH, MATRIX_HEIGHT, message, true);
-    scanShow();
-
-    if (--x < -messageWidth)
-    {
-      x = MATRIX_WIDTH;
-    }
+  case ScrollAnim:
+    scrollAnim();
+    break;
+  case ScrollText:
+    scrollText();
+    break;
   }
-  else
-  {
-    bool switchState = digitalRead(SWITCH_PIN);
-    if (switchState)
-    {
-      scroll();
-    }
-  }
+  delay(10);
 }

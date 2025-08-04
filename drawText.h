@@ -1,6 +1,6 @@
 #pragma once
 
-#include "scan.h"
+#include "scanMatrix.h"
 
 #if defined(MATRIX_16X16)
 #include "Font5x7FixedMono.h"
@@ -11,7 +11,7 @@ const GFXfont FONT = Picopixel;
 #endif
 
 void drawPixel(int x, int y, bool on) {
-  scanDrawPixel(x, y, on);
+  scanSetPixel(x, y, on);
 }
 
 uint8_t getCharWidth(unsigned char c)
