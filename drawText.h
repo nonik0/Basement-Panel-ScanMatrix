@@ -3,8 +3,8 @@
 #include "scanMatrix.h"
 
 #if defined(MATRIX_16X16)
-#include "Font5x7FixedMono.h"
-const GFXfont FONT = Font5x7FixedMono;
+#include "Font4x5Fixed.h"
+const GFXfont FONT = Font4x5Fixed;
 #elif defined(MATRIX_8X8)
 #include "Picopixel.h"
 const GFXfont FONT = Picopixel;

@@ -31,14 +31,14 @@ enum Mode
 bool statusLedState = false;
 bool statusLedFirstBlink = false;
 uint8_t statusLedBlinks = 0; // number of extra short blinks after long "ACK" blink
+unsigned long lastStatusLedUpdate = 0;
+unsigned long drawUpdateInterval = DEFAULT_DRAW_UPDATE_INTERVAL;
+unsigned long statusLedUpdateInterval = STATUS_UPDATE_INTERVAL;
 
 // display state
 volatile bool display = true;
 Mode mode = Mode::ScrollAnim;
 unsigned long lastDrawUpdate = 0;
-unsigned long lastStatusLedUpdate = 0;
-unsigned long drawUpdateInterval = DEFAULT_DRAW_UPDATE_INTERVAL;
-unsigned long statusLedUpdateInterval = STATUS_UPDATE_INTERVAL;
 
 void handleOnReceive(int bytesReceived)
 {
@@ -91,12 +91,45 @@ void handleOnReceive(int bytesReceived)
       {
         scrollTextSetMessage(buffer);
       }
-      else
+      else // command == 0x04
       {
-        // show temporary message
-        scanClear();
-        drawString(MESSAGE_X_OFFSET, MATRIX_HEIGHT - MESSAGE_Y_OFFSET, MATRIX_WIDTH, MATRIX_HEIGHT, buffer, true);
-        scanShow();
+        // TODO: str length checking
+
+        // Parse "line1|line2" format
+        char* pipe = strchr(buffer, '|');
+
+        if (pipe != nullptr)
+        {
+          // Split into two C-strings in-place
+          *pipe = '\0';
+          const char* line1 = buffer;
+          const char* line2 = pipe + 1;
+
+          uint8_t line1Width = getTextWidth(line1);
+          uint8_t line2Width = getTextWidth(line2);
+
+          // Center each line horizontally, split display in half vertically
+          uint16_t line1X = (MATRIX_WIDTH  - line1Width) / 2;
+          uint16_t line2X = (MATRIX_WIDTH  - line2Width) / 2 + 1;
+          const uint8_t line1Y = 6;
+          const uint8_t line2Y = 13;
+
+          scanClear();
+          drawString(line1X, line1Y, MATRIX_WIDTH, MATRIX_HEIGHT, line1, true);
+          drawString(line2X, line2Y, MATRIX_WIDTH, MATRIX_HEIGHT, line2, true);
+          scanShow();
+        }
+        else
+        {
+          // Single line — center horizontally and vertically
+          uint8_t textWidth = getTextWidth(buffer);
+          uint8_t x = (MATRIX_WIDTH  - textWidth) / 2 + 1;
+          const uint8_t y = 10;
+
+          scanClear();
+          drawString(x, y, MATRIX_WIDTH, MATRIX_HEIGHT, buffer, true);
+          scanShow();
+        }
 
         lastTempMessage = millis();
       }
@@ -126,6 +159,37 @@ void handleOnRequest()
   Wire.write((uint8_t)switchState);
 }
 
+void updateStatusLed()
+{
+  // status LED indicates when I2C message is received, long blink first, then short blink count indicates status
+  if ((statusLedBlinks > 0 || statusLedState) && millis() - lastStatusLedUpdate > statusLedUpdateInterval)
+  {
+    statusLedState = !statusLedState;
+    digitalWrite(STATUS_LED_PIN, !statusLedState);
+    lastStatusLedUpdate = millis();
+
+    if (statusLedBlinks > 0)
+    {
+      statusLedBlinks -= statusLedState ? 1 : 0;
+
+      // longer gap between first long blink and later short blinks
+      if (statusLedFirstBlink)
+      {
+        statusLedFirstBlink = false;
+        statusLedUpdateInterval = STATUS_UPDATE_INTERVAL >> 1;
+      }
+      else
+      {
+        statusLedUpdateInterval = statusLedState ? (STATUS_UPDATE_INTERVAL >> 2) : (STATUS_UPDATE_INTERVAL >> 3);
+      }
+    }
+    else
+    {
+      statusLedUpdateInterval = STATUS_UPDATE_INTERVAL;
+    }
+  }
+}
+
 void setup()
 {
   pinMode(STATUS_LED_PIN, OUTPUT);
@@ -150,30 +214,7 @@ void setup()
 
 void loop()
 {
-  // status LED indicates when I2C message is received, long blink first, then short blink count indicates status
-  if ((statusLedBlinks > 0 || statusLedState) && millis() - lastStatusLedUpdate > statusLedUpdateInterval)
-  {
-    statusLedState = !statusLedState;
-    digitalWrite(STATUS_LED_PIN, !statusLedState);
-    lastStatusLedUpdate = millis();
-
-    if (statusLedBlinks > 0)
-    {
-      statusLedBlinks -= statusLedState ? 1 : 0;
-      statusLedUpdateInterval = statusLedState ? (STATUS_UPDATE_INTERVAL >> 2) : (STATUS_UPDATE_INTERVAL >> 3);
-
-      // longer gap between first long blink and later short blinks
-      if (statusLedFirstBlink)
-      {
-        statusLedFirstBlink = false;
-        statusLedUpdateInterval = STATUS_UPDATE_INTERVAL >> 1;
-      }
-    }
-    else
-    {
-      statusLedUpdateInterval = STATUS_UPDATE_INTERVAL;
-    }
-  }
+  updateStatusLed();
 
   // check if ready to draw again
   bool switchState = digitalRead(SWITCH_PIN);
